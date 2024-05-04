@@ -8,11 +8,14 @@ import (
 )
 
 type config struct {
+	GRPC_DIAL_OPTION string `env:"GRPC_DIAL_OPTION"`
+	CERT_FILE_PATH string `env:"CERT_FILE_PATH"`
+
 	KAFKA_BROKER             string `env:"KAFKA_BROKER"`
 	KAFKA_VERSION            string `env:"KAFKA_VERSION"`
 	KAFKA_WORKER_POOL_NUMBER string `env:"KAFKA_WORKER_POOL_NUMBER"`
 
-	GRPC_PORT string `env:"GRPC_PORT"`
+	GRPC_ADDRESS string `env:"GRPC_ADDRESS"`
 }
 
 func EnvGetter() *config {

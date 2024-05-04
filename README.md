@@ -30,9 +30,12 @@ go get -u github.com/bas-baskara/kafka-consumer-grpc
 
 Set the following environment variables:
 
-- KAFKA_BROKER: Comma-separated list of Kafka broker addresses
-- GRPC_PORT: Port on which the gRPC server is running
-- KAFKA_WORKER_POOL_NUMBER: Number of worker pools for concurrent message processing
+- `KAFKA_BROKER`: Comma-separated list of Kafka broker addresses
+- `GRPC_ADDRESS`: Address of gRPC server
+- `KAFKA_WORKER_POOL_NUMBER`: Number of worker pools for concurrent message processing
+- `GRPC_DIAL_OPTION`: Options for gRPC dialing. Use `insecure` for local development.
+- `CERT_FILE_PATH`: Path to the TLS certificate file (required for production environments).
+
 
 
 ## Running the Consumer

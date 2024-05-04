@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -13,13 +12,26 @@ import (
 	"github.com/bas-baskara/kafka-consumer-grpc/configs"
 	pb "github.com/bas-baskara/kafka-consumer-grpc/protobuf"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var env = configs.EnvGetter()
 
 func initClientGrpc() (*pb.ListenMessagesClient, *grpc.ClientConn, error) {
-	conn, err := grpc.Dial(fmt.Sprintf("localhost:%s", env.GRPC_PORT), grpc.WithInsecure())
+	var opts []grpc.DialOption
+
+	if env.GRPC_DIAL_OPTION == "insecure" {
+		opts = append(opts, grpc.WithInsecure())
+	} else {
+		creds, err := credentials.NewClientTLSFromFile(env.CERT_FILE_PATH, "")
+		if err != nil {
+			log.Fatalf("Failed to create TLS credentials: %v", err)
+		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
+	}
+
+	conn, err := grpc.Dial(env.GRPC_ADDRESS, opts...)
 	if err != nil {
 		log.Fatal("Failed to dial server:", err)
 		return nil, nil, err
