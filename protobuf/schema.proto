@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package pubsubgateawy;
+option go_package = "./pubsubgateway";
+
+import "google/protobuf/timestamp.proto";
+
+service ListenMessages {
+    rpc HandleIncomingMessage(IncomingMessage) returns (ResponseIncominMessage);
+}
+
+message IncomingMessage {
+    string topic = 1;
+    bytes value = 2;
+    google.protobuf.Timestamp timestamp = 3;
+    string key = 4;
+}
+
+message ResponseIncominMessage {
+    bool result = 1;
+}
