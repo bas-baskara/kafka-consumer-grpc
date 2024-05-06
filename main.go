@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/bas-baskara/kafka-consumer-grpc/configs"
@@ -17,6 +18,7 @@ import (
 )
 
 var env = configs.EnvGetter()
+var initialTopics []string
 
 func initClientGrpc() (*pb.ListenMessagesClient, *grpc.ClientConn, error) {
 	var opts []grpc.DialOption
@@ -73,12 +75,12 @@ func main() {
 		}
 	}()
 
-	// subscribe to all topics
 	topics, err := consumer.Topics()
 	if err != nil {
-		log.Println("Error getting topics:", err)
-		return
+		log.Println("Error getting topics", err)
 	}
+
+	initialTopics = topics
 
 	// Trap SIGINT to trigger a graceful shutdown
 	signals := make(chan os.Signal, 1)
@@ -87,25 +89,75 @@ func main() {
 	// create channel
 	messageChan := make(chan *sarama.ConsumerMessage)
 
+	// consume all initial topics available
+	go consumeAllTopics(consumer, messageChan)
+
+	// start worker
 	workerNumber, err := strconv.Atoi(env.KAFKA_WORKER_POOL_NUMBER)
 	if err != nil {
 		log.Fatal("Worker number not set:", err)
 		return
 	}
 
-	// start worker
-
 	for i := 0; i < workerNumber; i++ {
 		go worker(messageChan, *client)
 	}
 
-	// consume messages
-	consumeMessages(topics, consumer, messageChan, signals)
+	// Periodically check for new topics and consume messages
+	tickerInterval := 10
+
+	tickerSecond, err := strconv.Atoi(env.KAFKA_TICKER_SECOND)
+	if err != nil {
+		log.Println("Error getting ticker interval in seconds", err)
+	} else {
+		tickerInterval = tickerSecond
+	}
+
+	go func(tickerInterval int) {
+		ticker := time.NewTicker(time.Duration(tickerInterval) * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			newConsumer, err := sarama.NewConsumer(brokers, config)
+			if err != nil {
+				log.Println("error when create new consumer connection", err)
+			}
+
+			newTopics, err := newConsumer.Topics()
+			if err != nil {
+				log.Println("Error getting topics in interval:", err)
+				newConsumer.Close()
+				continue
+			}
+
+			for _, newTopic := range newTopics {
+				if !containsTopic(initialTopics, newTopic) {
+					initialTopics = append(initialTopics, newTopic)
+					go consumeTopic(newTopic, consumer, messageChan)
+				}
+			}
+
+			if err := newConsumer.Close(); err != nil {
+				log.Println("Error closing new consumer in interval:", err)
+			}
+
+		}
+	}(tickerInterval)
 
 	// wait for shutdown signal
 	<-signals
 	log.Println("Shutdown signal received. Exiting...")
 
+}
+
+func containsTopic(topics []string, topic string) bool {
+	for _, t := range topics {
+		if t == topic {
+			return true
+		}
+	}
+
+	return false
 }
 
 func worker(messages <-chan *sarama.ConsumerMessage, client pb.ListenMessagesClient) {
@@ -131,42 +183,50 @@ func worker(messages <-chan *sarama.ConsumerMessage, client pb.ListenMessagesCli
 	}
 }
 
-func consumeMessages(topics []string, consumer sarama.Consumer, messageChan chan *sarama.ConsumerMessage, signals chan os.Signal) {
-	log.Println("Start consuming messages...")
-	for _, topic := range topics {
-		partitions, err := consumer.Partitions(topic)
-		if err != nil {
-			log.Printf("Error getting partitions for topic %s: %v", topic, err)
-			continue
-		}
-		for _, partition := range partitions {
-			go func(topic string, partition int32) {
-				partitionConsumer, err := consumer.ConsumePartition(topic, partition, sarama.OffsetNewest)
-				if err != nil {
-					log.Printf("Error creating partition consumer for topic %s, partition %d: %v", topic, partition, err)
-					return
-				}
-				defer func() {
-					if err := partitionConsumer.Close(); err != nil {
-						log.Printf("Error closing partition consumer for topic %s, partition %d: %v", topic, partition, err)
-					}
-				}()
-
-				// Process messages
-				for {
-					select {
-					case msg := <-partitionConsumer.Messages():
-						messageChan <- msg
-						// log.Printf("Received message: Topic: %s, Partition: %d, Offset: %d, Key: %s, Value: %s\n",
-						// 	msg.Topic, msg.Partition, msg.Offset, string(msg.Key), string(msg.Value))
-					case err := <-partitionConsumer.Errors():
-						log.Printf("Error consuming message: %v", err)
-					case <-signals:
-						log.Println("Received shutdown signal. Closing consumer...")
-					}
-				}
-			}(topic, partition)
-		}
+func consumeAllTopics(consumer sarama.Consumer, messageChan chan *sarama.ConsumerMessage) {
+	// subscribe to all topics
+	topics, err := consumer.Topics()
+	if err != nil {
+		log.Println("Error getting topics:", err)
+		return
 	}
 
+	for _, topic := range topics {
+		go consumeTopic(topic, consumer, messageChan)
+	}
+}
+
+func consumeTopic(topic string, consumer sarama.Consumer, messageChan chan<- *sarama.ConsumerMessage) {
+	partitions, err := consumer.Partitions(topic)
+	if err != nil {
+		log.Printf("error getting partitions for topic %s: %v", topic, err)
+		return
+	}
+
+	for _, partition := range partitions {
+		go func(topic string, partition int32) {
+			partitionConsumer, err := consumer.ConsumePartition(topic, partition, sarama.OffsetNewest)
+			if err != nil {
+				log.Printf("error creating partition consumer for topic %s, partition %d: %v", topic, partition, err)
+				return
+			}
+
+			defer func() {
+				if err := partitionConsumer.Close(); err != nil {
+					log.Printf("Error closing partition consumer for topic %s, partition %d: %v", topic, partition, err)
+				}
+			}()
+
+			// process message
+			for {
+				select {
+				case msg := <-partitionConsumer.Messages():
+					messageChan <- msg
+				case err := <-partitionConsumer.Errors():
+					log.Printf("Error consuming message: %v", err)
+				}
+			}
+
+		}(topic, partition)
+	}
 }
